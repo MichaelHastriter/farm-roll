@@ -1,0 +1,9 @@
+{
+  "name": "Farm Roll Online v0.8.0",
+  "short_name": "Farm Roll",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f3eddc",
+  "theme_color": "#243c2b",
+  "description": "Farm Roll Online v0.8.0 with Base/Intermediate deck choice, 30-board V2 Base/Intermediate setup, per-player livestock/crop layout selection, six themed Event decks, optional Event Reveal limits, compact Play/Farm/Hand/Table navigation, and the v0.8 Power-engine playtest."
+}
