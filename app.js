@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.8.1";
+  const VERSION = "0.8.2";
   const LOCAL_KEY = "farm-roll-online-v0.8.0";
   const LEGACY_KEYS = ["farm-roll-online-v0.7.1","farm-roll-online-v0.7.0","farm-roll-online-v0.6.9","farm-roll-online-v0.6.8","farm-roll-online-v0.6.7","farm-roll-online-v0.6.5","farm-roll-online-v0.6.4","farm-roll-online-v0.6.3","farm-roll-online-v0.6.2","farm-roll-online-v0.6.1","farm-roll-online-v0.6","farm-roll-online-v0.5b","farm-roll-online-v0.5a2","farm-roll-online-v0.5a1","farm-roll-online-v0.5a","farm-roll-online-v0.4b"];
   const POLL_MS = 3500;
@@ -904,7 +904,7 @@
           <label>Bots <span class="tiny">0–7 • 8 total seats max</span><select id="createBotCount">${[0,1,2,3,4,5,6,7].map(n=>`<option value="${n}">${n===0?"None":`${n} bot${n===1?"":"s"}`}</option>`).join("")}</select></label>
           <div id="createBotConfigs" class="bot-config-list"><div class="tiny">No bots selected.</div></div>
           <div class="note setup-note"><strong>Random</strong> bots choose random legal decisions. <strong>Focused</strong> bots use a different hidden 2–7 animal-pair / 3–12 crop profile, rotate completed rows, and use strategic Butcher choices. Choose <strong>Asymmetric — players choose</strong> to set each bot's livestock and crop board independently; Symmetric and Auto Select follow the table's board mode.</div>
-          <label>Powers <span class="tiny">v0.8 Power-engine playtest</span><select id="createPowers"><option value="on" selected>ON — use the 5-card Power market</option><option value="off">OFF — classic rules</option></select></label>
+          <label>Powers <span class="tiny">v0.8 Power-engine playtest</span><select id="createPowers"><option value="on" selected>ON — use the 5-card Power River</option><option value="off">OFF — classic rules</option></select></label>
           <div class="note warning setup-note"><strong>Power playtest:</strong> acquisition, initiative ordering, Power Hungry, Fortune Teller, and Planner are live. Other Power cards are visible with their locked rules but are still marked as engine-pending in this build.</div>
           <label>Maximum Event Reveals <span class="tiny">optional • blank = normal game</span><input id="createMaxReveals" inputmode="numeric" pattern="[0-9]*" min="1" step="1" placeholder="e.g. 7"></label>
           <button id="createBtn" class="primary" ${ui.busy?"disabled":""}>${ui.busy?"Opening…":"OPEN TABLE"}</button>
@@ -1152,7 +1152,7 @@
         ${active==="play"?playWorkspace(g,hasRoll,submitted):""}
         ${active==="farm"?farmPanel():""}
         ${active==="hand"?cardsPanel():""}
-        ${active==="table"?`${playersPanel()}${marketPanel()}${deckStripPanel()}${roomToolsPanel()}`:""}
+        ${active==="table"?`${playersPanel()}${marketPanel()}${powerRiverPanel()}${deckStripPanel()}${roomToolsPanel()}`:""}
       </main>
 
       <div class="footer">Farm Roll Online v${VERSION} • Board set V2 • Bot engine Focused v3</div>
@@ -1474,12 +1474,28 @@
     </section>`;
   }
 
+  function powerRiverPanel(){
+    const ps=ui.powerState||{};
+    if(!ui.server?.game?.powers_enabled) return "";
+    if(!ps.enabled) return `<section class="card power-river-card"><div class="note">Power data is unavailable for this table.</div></section>`;
+    const river=Array.isArray(ps.market)?ps.market:[];
+    const mine=Array.isArray(ps.my_powers)?ps.my_powers:[];
+    return `<section class="card power-river-card">
+      <div class="topbar"><div><h2 style="margin:0">⚡ Power River</h2><div class="tiny">Public face-up Powers • oldest → newest • $0 / $5 / $10 / $20 / $30</div></div><span class="phase-pill">PUBLIC</span></div>
+      <div class="power-market-grid">${river.map(p=>{const cost=Number(p.cost??p.base_cost??0),active=String(p.engine_status)==="implemented"||String(p.engine_status)==="tested";return `<article class="power-card ${active?"implemented":"pending"}"><div class="power-card-head"><div><strong>${esc(p.name)}</strong><small>${active?"ENGINE ACTIVE":"RULE LOCKED • ENGINE PENDING"}</small></div><span>$${cost}</span></div><p>${esc(p.rules_text||"")}</p></article>`}).join("")||'<div class="note">The Power River is empty.</div>'}</div>
+      <div class="power-owned-section">
+        <div class="cards-heading"><strong>⚡ My Powers</strong><span class="tiny">${mine.length} owned</span></div>
+        ${mine.length?`<div class="power-owned-grid">${mine.map(p=>`<article class="power-owned-card"><strong>${esc(p.name)}</strong><small>${esc(p.rules_text||"")}</small><span>Acquired for $${Number(p.acquisition_price||0)}</span></article>`).join("")}</div>`:`<div class="note">No Powers owned yet.</div>`}
+      </div>
+    </section>`;
+  }
+
   function powerSelectionPanel(){
     const ps=ui.powerState||{}, market=Array.isArray(ps.market)?ps.market:[], queue=Array.isArray(ps.queue)?ps.queue:[], cur=ps.current_claim||null;
     const me=ui.server?.me||{}, cash=Number(me.cash||0), mine=Array.isArray(ps.my_powers)?ps.my_powers:[];
     if(!ps.enabled) return `<section class="card"><div class="note">Powers are off for this table.</div></section>`;
     return `<section class="card power-phase-card">
-      <div class="topbar"><div><h2 style="margin:0">⚡ Power Market</h2><div class="tiny">Oldest → newest • $0 / $5 / $10 / $15 / $20 • market shifts after every claim</div></div><span class="phase-pill">${ps.my_turn?"YOUR CLAIM":"GLOBAL QUEUE"}</span></div>
+      <div class="topbar"><div><h2 style="margin:0">⚡ Power River</h2><div class="tiny">Oldest → newest • $0 / $5 / $10 / $20 / $30 • river shifts after every claim</div></div><span class="phase-pill">${ps.my_turn?"YOUR CLAIM":"GLOBAL QUEUE"}</span></div>
       <div class="power-queue">${queue.map((q,i)=>`<span class="power-queue-chip ${i===0?"current":""}">#${Number(q.initiative_card_number||0)} ${esc(q.display_name)} • Face ${Number(q.source_face||0)}</span>`).join("")||'<span class="tiny">No unresolved claims.</span>'}</div>
       ${cur?`<div class="note ${ps.my_turn?"":"warning"}" style="margin-top:9px"><strong>#${Number(cur.initiative_card_number||0)}:</strong> ${ps.my_turn?"Choose one Power now.":`${esc(cur.display_name)} chooses next.`}</div>`:""}
       <div class="power-market-grid">${market.map(p=>{const cost=Number(p.cost??p.base_cost??0),active=String(p.engine_status)==="implemented"||String(p.engine_status)==="tested";return `<article class="power-card ${active?"implemented":"pending"}"><div class="power-card-head"><div><strong>${esc(p.name)}</strong><small>${active?"ENGINE ACTIVE":"RULE LOCKED • ENGINE PENDING"}</small></div><span>$${cost}</span></div><p>${esc(p.rules_text||"")}</p>${ps.my_turn?`<button class="${active?"primary":"secondary"}" data-power-pick="${Number(p.power_id)}" ${cash<cost?"disabled":""}>Take ${esc(p.name)} • $${cost}</button>`:""}</article>`}).join("")}</div>
