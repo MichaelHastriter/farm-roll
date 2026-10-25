@@ -429,7 +429,7 @@ input,select{width:100%;min-height:46px;border:1px solid #cfc5ae;background:#fff
   .workspace.farm .card,.workspace.hand .card{max-width:900px;margin-left:auto;margin-right:auto}
   .workspace.table{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}
   .workspace.table>.card{margin-top:12px}
-  .workspace.table .players-card{grid-column:1}.workspace.table .market-card{grid-column:2;grid-row:1}.workspace.table .deck-strip-card{grid-column:1 / -1}
+  .workspace.table .players-card{grid-column:1}.workspace.table .market-card{grid-column:2;grid-row:1}.workspace.table .power-river-card{grid-column:1 / -1;grid-row:2}.workspace.table .deck-strip-card{grid-column:1 / -1}
   .workspace.table .room-tools-card{grid-column:1 / -1;max-width:520px;width:100%;justify-self:center}
   .workspace.play>.card,.workspace.play>.endgame-banner{max-width:860px;margin-left:auto;margin-right:auto}
 }
@@ -452,3 +452,16 @@ input,select{width:100%;min-height:46px;border:1px solid #cfc5ae;background:#fff
 .owned-powers{margin-top:12px;padding-top:10px;border-top:1px dashed #cdbf88}.owned-powers>div{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.owned-powers span{background:#eef4e8;border:1px solid #c6d4b8;border-radius:999px;padding:5px 8px;font-size:9px;font-weight:900;color:#36513b}
 @media(max-width:820px){.power-market-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.power-card:first-child{grid-column:1/-1}}
 @media(max-width:420px){.power-market-grid{grid-template-columns:1fr}.power-card:first-child{grid-column:auto}.power-card{padding:9px}.initiative-chip{width:100%;border-radius:10px}.power-queue{display:grid}.power-queue-chip{justify-content:flex-start}}
+
+/* v0.8.2 always-visible Power River */
+.power-river-card{border-color:#c8ad43;background:linear-gradient(160deg,#fffdf6,#fbf2c8)}
+.power-owned-section{margin-top:14px;padding-top:12px;border-top:1px dashed #cdbf88}
+.power-owned-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+.power-owned-card{min-width:0;padding:10px;border-radius:12px;border:1px solid #c6d4b8;background:#eef4e8;display:flex;flex-direction:column;gap:5px}
+.power-owned-card strong{font-size:12px;line-height:1.2;color:#36513b}
+.power-owned-card small{font-size:9px;line-height:1.35;color:#4b5f4d}
+.power-owned-card span{font-size:8px;font-weight:900;color:#5d705f}
+.owned-powers-inline{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+.owned-powers-inline>span{padding:10px;border-radius:12px;border:1px solid #c6d4b8;background:#eef4e8;display:flex;flex-direction:column;gap:5px}
+.owned-powers-inline strong{font-size:12px;color:#36513b}.owned-powers-inline small{font-size:9px;line-height:1.35;color:#4b5f4d}
+@media(max-width:560px){.power-owned-grid,.owned-powers-inline{grid-template-columns:1fr}}
