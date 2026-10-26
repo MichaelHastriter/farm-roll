@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.8.2";
+  const VERSION = "0.8.3";
   const LOCAL_KEY = "farm-roll-online-v0.8.0";
   const LEGACY_KEYS = ["farm-roll-online-v0.7.1","farm-roll-online-v0.7.0","farm-roll-online-v0.6.9","farm-roll-online-v0.6.8","farm-roll-online-v0.6.7","farm-roll-online-v0.6.5","farm-roll-online-v0.6.4","farm-roll-online-v0.6.3","farm-roll-online-v0.6.2","farm-roll-online-v0.6.1","farm-roll-online-v0.6","farm-roll-online-v0.5b","farm-roll-online-v0.5a2","farm-roll-online-v0.5a1","farm-roll-online-v0.5a","farm-roll-online-v0.4b"];
   const POLL_MS = 3500;
@@ -176,7 +176,7 @@
     };
   }
   function newEditor(){
-    return {actionType:"livestock",blackFace:1,actions:[],selected:[],used:[]};
+    return {actionType:"livestock",blackFace:1,actions:[],selected:[],used:[],committedTarget:1};
   }
   function loadLocal(){
     try {
@@ -665,21 +665,32 @@
   function selectedDice(){ return sharedDice().filter(d=>ui.editor.selected.includes(d.id)&&!ui.editor.used.includes(d.id)); }
   function selectedSum(){ return selectedDice().reduce((s,d)=>s+(d.value||0),0); }
   function selectedCost(){ return selectedDice().reduce((sum,d)=>sum+dieCost(d),0); }
+  function hasPower(effectKey){
+    return (ui.powerState?.my_powers||[]).some(p=>String(p.effect_key||"")===String(effectKey));
+  }
+  function resourceDiceLimit(){ return hasPower("workaholic")?6:3; }
+  function committedTarget(){ return Math.max(1,Math.min(18,Number(ui.editor.committedTarget||1))); }
+  function effectiveResourceTarget(){
+    const sum=selectedSum();
+    return hasPower("committed")&&sum>=19?committedTarget():sum;
+  }
   function validSelection(type){
     const ds=selectedDice();
-    if(ds.length<1||ds.length>3) return false;
-    if(type==="crop"&&ds.some(d=>d.type==="livestock")) return false;
-    if(type==="livestock"&&ds.some(d=>d.type==="crop")) return false;
-    if(ds.some(d=>d.type==="livestock")&&ds.some(d=>d.type==="crop")) return false;
-    const n=selectedSum();
-    return n>=1&&n<=18&&resourceSpaceAvailable(type,n);
+    if(ds.length<1||ds.length>resourceDiceLimit()) return false;
+    if(!hasPower("flexible")){
+      if(type==="crop"&&ds.some(d=>d.type==="livestock")) return false;
+      if(type==="livestock"&&ds.some(d=>d.type==="crop")) return false;
+    }
+    const raw=selectedSum(), target=effectiveResourceTarget();
+    if(raw>18&&!hasPower("committed")) return false;
+    return target>=1&&target<=18&&resourceSpaceAvailable(type,target);
   }
 
   function toggleDie(id){
     if(ui.server?.my_submission||ui.busy) return;
     if(ui.editor.used.includes(id)) return;
     if(ui.editor.selected.includes(id)) ui.editor.selected=ui.editor.selected.filter(x=>x!==id);
-    else if(ui.editor.selected.length<3) ui.editor.selected.push(id);
+    else if(ui.editor.selected.length<resourceDiceLimit()) ui.editor.selected.push(id);
     saveLocal(); render();
   }
   function chooseType(t){
@@ -699,10 +710,10 @@
       a={type:"blacktrack",face:ui.editor.blackFace,title:"⬛ Black track prep",detail:`Circle face ${ui.editor.blackFace} • zero dice`};
     }else{
       if(!validSelection(ui.editor.actionType)) return;
-      const ds=selectedDice(), target=selectedSum(), cost=selectedCost();
+      const ds=selectedDice(), raw=selectedSum(), target=effectiveResourceTarget(), cost=selectedCost();
       a={type:ui.editor.actionType,diceIds:ds.map(d=>d.id),target,cost,
         title:ui.editor.actionType==="livestock"?`🐄 Livestock ${target}`:`🌱 Crop ${target}`,
-        detail:`${ds.map(shortDie).join(" + ")}${cost?` • cost: $${cost}`:" • free dice"}`};
+        detail:`${ds.map(shortDie).join(" + ")}${raw>=19&&target!==raw?` → ${target} (Committed)`:""}${cost?` • cost: $${cost}`:" • free dice"}`};
       ui.editor.used.push(...a.diceIds); ui.editor.selected=[];
     }
     ui.editor.actions.push(a);saveLocal();render();
@@ -984,7 +995,7 @@
   function deckStripPanel(){
     const slots=deckSlots();
     if(!slots.length){
-      return `<section class="card deck-strip-card"><div class="topbar"><div><h2 style="margin:0">🂠 Six themed Draw Decks</h2><div class="tiny">The v0.8.1 client expects the room server to provide its six themed deck columns.</div></div><span class="phase-pill">v${VERSION}</span></div><div class="note warning">The live room server has not supplied the six-deck mapping yet. Refresh the room if its themed deck mapping has not loaded yet.</div></section>`;
+      return `<section class="card deck-strip-card"><div class="topbar"><div><h2 style="margin:0">🂠 Six themed Draw Decks</h2><div class="tiny">The current client expects the room server to provide its six themed deck columns.</div></div><span class="phase-pill">v${VERSION}</span></div><div class="note warning">The live room server has not supplied the six-deck mapping yet. Refresh the room if its themed deck mapping has not loaded yet.</div></section>`;
     }
     const open=slots.find(x=>Number(x.slot)===Number(ui.openDeckSlot));
     return `<section class="card deck-strip-card">
@@ -1212,12 +1223,12 @@
     if(submitted) return `<section class="card center"><div class="big-icon">🔒</div><h2>Your actions are committed</h2><p class="small">Actions and new fences are permanent. They stay private until every player commits. Then all players see the three actions and learn whether event play is Solo or Cooperative before anyone chooses actual cards.</p></section>`;
     const dice=sharedDice(), ds=selectedDice(), sum=selectedSum(), cost=selectedCost();
     const type=ui.editor.actionType, diceType=type==="livestock"||type==="crop";
-    const actionSpend=committedActionCost(), firstFee=estimatedFirstResourceFee(), fenceSpend=(ui.fenceDraft||[]).length, projected=actionSpend+firstFee+fenceSpend;
+    const actionSpend=committedActionCost(), firstFee=estimatedFirstResourceFee(), fenceCount=(ui.fenceDraft||[]).length, fenceSpend=fenceDraftCost(), projected=actionSpend+firstFee+fenceSpend;
     const cash=cashOnHand(), canAfford=projected<=cash, planValid=queuedResourcesFit();
     const canAdd=ui.editor.actions.length<3 && ((type==="house"&&playTrackSpaceAvailable())||(type==="blacktrack"&&blackTrackSpaceAvailable(ui.editor.blackFace))||validSelection(type));
     return `
       <section class="card cash-card">
-        <div class="cash-strip"><div><div class="tiny">CASH</div><div class="cash-big">$${cash}</div></div><div class="cash-projection"><div><strong>$${projected}</strong> committed spend</div><div class="tiny">$${actionSpend} dice • $${firstFee} first-resource fees • $${fenceSpend} new fences</div></div><div class="cash-after ${canAfford?"":"negative"}">$${cash-projected}<span>after commit</span></div></div>
+        <div class="cash-strip"><div><div class="tiny">CASH</div><div class="cash-big">$${cash}</div></div><div class="cash-projection"><div><strong>$${projected}</strong> committed spend</div><div class="tiny">$${actionSpend} dice • $${firstFee} first-resource fees • $${fenceSpend} fences${hasPower("efficient_fencing")?` (${fenceCount} segments)`:""}</div></div><div class="cash-after ${canAfford?"":"negative"}">$${cash-projected}<span>after commit</span></div></div>
         ${canAfford?"":`<div class="note error" style="margin-top:9px">You cannot spend more cash than you have. Remove an action or tentative fence.</div>`}
         ${planValid?"":`<div class="note error" style="margin-top:9px">One of your livestock actions no longer has a fully fenced blank cell. Restore the needed fencing or undo that action.</div>`}
       </section>
@@ -1235,6 +1246,7 @@
           <button class="choice ${type==="blacktrack"?"active":""}" data-type="blacktrack">⬛ Black track</button>
         </div>
         ${type==="blacktrack"?`<div style="margin-top:12px"><div class="small">Choose face/column:</div><div class="face-row black-face-row" style="margin-top:7px">${[1,2,3,4,5,6].map(n=>blackFaceChoice(n)).join("")}</div></div>`:""}
+        ${diceType&&sum>=19&&hasPower("committed")?`<label class="committed-target">⚡ Committed target row<select id="committedTargetSelect">${Array.from({length:18},(_,i)=>{const row=i+1,rid=resourceIds(type)[i],rr=RESOURCES[rid]||{};return `<option value="${row}" ${committedTarget()===row?"selected":""}>${row} • ${rr.icon||""} ${esc(rr.short||rr.name||"")}</option>`}).join("")}</select></label>`:""}
         <div class="note ${diceType&&ds.length&&!validSelection(type)?"warning":""}" style="margin-top:12px">${actionHint(type,ds,sum)}</div>
         <button id="addBtn" class="primary" style="width:100%;margin-top:12px" ${canAdd?"":"disabled"}>Add action</button>
       </section>
@@ -1243,7 +1255,7 @@
         <div class="action-slots">${[0,1,2].map(actionSlot).join("")}</div>
       </section>
       ${fenceCommitPanel()}
-      <div class="commit"><button id="submitBtn" class="primary" ${ui.editor.actions.length===3&&!ui.busy&&canAfford&&planValid?"":"disabled"}>🔒 Commit 3 actions + ${fenceSpend} fence${fenceSpend===1?"":"s"} • $${projected}</button></div>`;
+      <div class="commit"><button id="submitBtn" class="primary" ${ui.editor.actions.length===3&&!ui.busy&&canAfford&&planValid?"":"disabled"}>🔒 Commit 3 actions + ${fenceCount} fence${fenceCount===1?"":"s"} • $${projected}</button></div>`;
   }
 
   function revealedActionLabel(a,submission){
@@ -1855,8 +1867,15 @@
     if(d.type==="white") return 0;
     const face=Number(d.value||0);
     if(d.type==="black") return faceUnlocked(face)?0:face;
-    if(d.type==="livestock"||d.type==="crop") return face<=6&&faceUnlocked(face)?0:5;
+    if(d.type==="livestock"||d.type==="crop"){
+      if((face===7||face===8)&&hasPower("sevens_eights_free")) return 0;
+      return face<=6&&faceUnlocked(face)?0:5;
+    }
     return 0;
+  }
+  function fenceDraftCost(){
+    const n=(ui.fenceDraft||[]).length;
+    return hasPower("efficient_fencing")?Math.ceil(n/2):n;
   }
   function committedActionCost(){
     const dice=Object.fromEntries(sharedDice().map(d=>[d.id,d]));
@@ -1993,7 +2012,8 @@
       return `<div class="fence-cell-unit">${fenceSegmentButton(`v:${row}:${i}`,"v")}<div class="fence-cell ${state} ${fenced?"enclosed":""}"><span>${state==="circle"?"◉":state==="x"?"X":c}</span></div></div>`;
     });
     const right=fenceSegmentButton(`v:${row}:${cap}`,"v");
-    return `<section class="card fence-card"><div class="topbar"><div><h2 style="margin:0">🪵 Fences — free action</h2><div class="tiny">$1 per new segment • incomplete fencing allowed • permanent at Commit</div></div><span class="phase-pill">${draft} NEW</span></div>
+    const previewCost=hasPower("efficient_fencing")?Math.ceil(draft/2):draft;
+    return `<section class="card fence-card"><div class="topbar"><div><h2 style="margin:0">🪵 Fences — free action</h2><div class="tiny">${hasPower("efficient_fencing")?"Efficient Fencing: every 2 new paid segments cost $1":"$1 per new segment"} • incomplete fencing allowed • permanent at Commit</div></div><span class="phase-pill">${draft} NEW • $${previewCost}</span></div>
       <div class="grid two" style="margin-top:10px"><label>Livestock row<select id="fenceRowSelect">${Array.from({length:18},(_,i)=>{const rid=resourceIds("livestock")[i],rr=RESOURCES[rid]||{};return `<option value="${i+1}" ${row===i+1?"selected":""}>${i+1} • ${rr.icon||""} ${esc(rr.short||rr.name||"")}</option>`}).join("")}</select></label><div class="fence-summary"><strong>${r.icon} ${esc(r.name)}</strong><span>${cap} cells • ${blankCapacity("livestock",row)} fenced blank</span></div></div>
       <div class="fence-help">Tap an edge to buy it tentatively. <strong>Green</strong> = already permanent; <strong>gold</strong> = new this commit. Shared horizontal borders are the same fence when viewed from either adjacent row.</div>
       <div class="fence-scroll" data-scroll-key="fence-row-${row}"><div class="fence-hline">${top.join("")}</div><div class="fence-middle">${cells.join("")}${right}</div><div class="fence-hline">${bottom.join("")}</div></div>
@@ -2079,7 +2099,7 @@
       </div>
       <div class="tiny track-legend">◉ circled / still owed &nbsp; ⓧ X'd / completed &nbsp; ○ available</div>
       <div class="note" style="margin-top:10px">
-        The rolled black die automatically circles its face for every player when space remains. During <strong>Draw Cards</strong>, every usable pending circle is mandatory. When every circle in a number is X'd, that number becomes <strong>$0 on the black, livestock, and crop dice</strong>. Completing <strong>any 4 of the 6 face columns</strong> triggers the endgame countdown. Each face also points to one randomly assigned themed Draw Deck for the whole game. Values 7–8 never unlock and remain $5 on the specialty d8s.
+        The rolled black die automatically circles its face for every player when space remains. During <strong>Draw Cards</strong>, every usable pending circle is mandatory. When every circle in a number is X'd, that number becomes <strong>$0 on the black, livestock, and crop dice</strong>. Completing <strong>any 4 of the 6 face columns</strong> triggers the endgame countdown. Each face also points to one randomly assigned themed Draw Deck for the whole game. Values 7–8 normally cost $5 on the specialty d8s; <strong>7s &amp; 8s Are Free</strong> makes those rolls $0.
       </div>
       ${playTrackPanel()}
     </div>`;
@@ -2133,14 +2153,17 @@
       return `Zero-dice action: circle Play Cards space #${idx} ${PLAY_ICON[typ]} (${playTypeName(typ)}).`;
     }
     if(type==="blacktrack"){ const t=boardState().draw_track?.[String(ui.editor.blackFace)]||{}; const x=Number(t.xed||0),cap=Number(t.capacity||0),c=Number(t.circled||0); return blackTrackSpaceAvailable(ui.editor.blackFace)?`Zero-dice action: circle face ${ui.editor.blackFace}. <strong>${x}/${cap} completed</strong> • ${Math.max(0,cap-x)} not X’d${c?` • ${c} already pending`:""}.`:`Face ${ui.editor.blackFace} is fully X’d and FREE.`; }
-    if(!ds.length)return `Select 1–3 available dice to make a ${type} row from 1–18.`;
-    if(type==="crop"&&ds.some(d=>d.type==="livestock"))return "Livestock d8 cannot acquire crops.";
-    if(type==="livestock"&&ds.some(d=>d.type==="crop"))return "Crop d8 cannot acquire livestock.";
-    if(ds.some(d=>d.type==="livestock")&&ds.some(d=>d.type==="crop"))return "The two specialty d8s cannot be mixed in one resource action.";
-    if(sum<1||sum>18)return `Target ${sum} is outside rows 1–18.`;
-    if(!resourceSpaceAvailable(type,sum)){ if(type==="livestock"){const rid=resourceIds("livestock")[sum-1],rr=RESOURCES[rid]||{};return `<strong>${rr.icon||"🐄"} ${esc(rr.name||`Livestock row ${sum}`)}</strong> — Row ${sum} needs a fully fenced blank cell. <button class="inline-jump" data-jump-row="${sum}">Jump to Row ${sum}</button>`;} return `Crop row ${sum} has no blank cell left.`; }
-    const rid=resourceIds(type)[sum-1], rr=RESOURCES[rid];
-    return `Valid ${type} action: row ${sum}${rr?` • ${rr.icon} ${rr.short}`:""}.<div class="action-row-status">${resourceActionStatus(type,sum)}</div>`;
+    if(!ds.length)return `Select 1–${resourceDiceLimit()} available dice to make a ${type} row from 1–18.`;
+    if(!hasPower("flexible")&&type==="crop"&&ds.some(d=>d.type==="livestock"))return "Livestock d8 cannot acquire crops unless Flexible is active.";
+    if(!hasPower("flexible")&&type==="livestock"&&ds.some(d=>d.type==="crop"))return "Crop d8 cannot acquire livestock unless Flexible is active.";
+    if(ds.length>resourceDiceLimit())return `This action can use at most ${resourceDiceLimit()} dice.`;
+    if(sum>18&&!hasPower("committed"))return `Raw total ${sum} is above 18. Committed is required to map it to a farm row.`;
+    const target=effectiveResourceTarget();
+    if(target<1||target>18)return `Target ${target} is outside rows 1–18.`;
+    if(!resourceSpaceAvailable(type,target)){ if(type==="livestock"){const rid=resourceIds("livestock")[target-1],rr=RESOURCES[rid]||{};return `<strong>${rr.icon||"🐄"} ${esc(rr.name||`Livestock row ${target}`)}</strong> — Row ${target} needs a fully fenced blank cell. <button class="inline-jump" data-jump-row="${target}">Jump to Row ${target}</button>`;} return `Crop row ${target} has no blank cell left.`; }
+    const rid=resourceIds(type)[target-1], rr=RESOURCES[rid];
+    const mapped=sum>=19&&target!==sum?` • raw ${sum} → ${target} via Committed`:"";
+    return `Valid ${type} action: row ${target}${rr?` • ${rr.icon} ${rr.short}`:""}${mapped}.<div class="action-row-status">${resourceActionStatus(type,target)}</div>`;
   }
   function actionSlot(i){
     const a=ui.editor.actions[i];
@@ -2236,6 +2259,7 @@
     document.querySelectorAll("[data-marker-info]").forEach(el=>bindLongPressMarker(el));
     document.querySelectorAll("[data-fence]").forEach(x=>x.addEventListener("click",()=>toggleFence(x.dataset.fence)));
     $("#fenceRowSelect")?.addEventListener("change",e=>{ui.fenceRow=Number(e.target.value);saveLocal();render();});
+    $("#committedTargetSelect")?.addEventListener("change",e=>{ui.editor.committedTarget=Number(e.target.value);saveLocal();render();});
 
     document.querySelectorAll("select,input,textarea").forEach(el=>{
       el.addEventListener("focus",()=>holdBackgroundRender(60000));
