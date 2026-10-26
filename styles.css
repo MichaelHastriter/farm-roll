@@ -465,3 +465,8 @@ input,select{width:100%;min-height:46px;border:1px solid #cfc5ae;background:#fff
 .owned-powers-inline>span{padding:10px;border-radius:12px;border:1px solid #c6d4b8;background:#eef4e8;display:flex;flex-direction:column;gap:5px}
 .owned-powers-inline strong{font-size:12px;color:#36513b}.owned-powers-inline small{font-size:9px;line-height:1.35;color:#4b5f4d}
 @media(max-width:560px){.power-owned-grid,.owned-powers-inline{grid-template-columns:1fr}}
+
+/* v0.8.3 active acquisition Powers */
+.committed-target{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:10px;margin-top:12px;padding:10px 12px;border:1px solid #cdbb78;border-radius:12px;background:#fff9df;font-size:11px;font-weight:900;color:#5b4b16}
+.committed-target select{min-height:42px;padding:8px 10px}
+@media(max-width:520px){.committed-target{grid-template-columns:1fr}.committed-target select{width:100%}}
