@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.8.3";
+  const VERSION = "0.8.4";
   const LOCAL_KEY = "farm-roll-online-v0.8.0";
   const LEGACY_KEYS = ["farm-roll-online-v0.7.1","farm-roll-online-v0.7.0","farm-roll-online-v0.6.9","farm-roll-online-v0.6.8","farm-roll-online-v0.6.7","farm-roll-online-v0.6.5","farm-roll-online-v0.6.4","farm-roll-online-v0.6.3","farm-roll-online-v0.6.2","farm-roll-online-v0.6.1","farm-roll-online-v0.6","farm-roll-online-v0.5b","farm-roll-online-v0.5a2","farm-roll-online-v0.5a1","farm-roll-online-v0.5a","farm-roll-online-v0.4b"];
   const POLL_MS = 3500;
@@ -158,6 +158,15 @@
   let sb = null;
   let pollTimer = null;
   let ui = loadLocal();
+  // Restore canonical V2 board maps cached from the last successful catalog load.
+  // This prevents a transient auth/catalog failure from relabeling a saved V2 board as Standard.
+  if(ui.boardMaps && typeof ui.boardMaps==="object"){
+    Object.entries(ui.boardMaps).forEach(([key,map])=>{
+      if(Array.isArray(map?.livestock)&&map.livestock.length===18&&Array.isArray(map?.crop)&&map.crop.length===18){
+        BOARD_MAPS[key]={livestock:map.livestock.map(Number),crop:map.crop.map(Number)};
+      }
+    });
+  }
   let backgroundRenderPending = false;
   let interactionHoldUntil = 0;
   let railInteractionDepth = 0;
@@ -172,7 +181,7 @@
       gameId:null, playerId:null, roomCode:null, playerName:"",
       isHost:false, server:null, farmView:"livestock", workspaceView:"play", playChoices:[], fenceDraft:[], fenceRow:1,
       butcherDraft:{key:"",choices:{}}, vanityDraft:{left:null,right:null}, drawDraft:{}, initiativeCards:[], powerState:null, marketChartOpen:false,
-      openDeckSlot:null, liveFarmOpen:{}, finalOpenPlayers:{}, finalAuditOpen:{}, editor:newEditor()
+      openDeckSlot:null, liveFarmOpen:{}, finalOpenPlayers:{}, finalAuditOpen:{}, boardMaps:{}, editor:newEditor()
     };
   }
   function newEditor(){
@@ -212,12 +221,18 @@
         const {error}=await sb.auth.signInAnonymously();
         if(error) throw error;
       }
-      await loadBoardCatalogs();
+      let catalogError=null;
+      try{ await loadBoardCatalogs(); }catch(e){ catalogError=e; }
       if(ui.gameId){
         ui.screen="room";
-        await refreshRoom(false);
-        startPolling();
+        try{
+          await refreshRoom(false);
+          startPolling();
+        }catch(e){
+          ui.message="ERR:"+friendly(e);
+        }
       }
+      if(catalogError && !ui.message) ui.message="ERR:"+friendly(catalogError);
     }catch(e){
       ui.message="ERR:"+friendly(e);
     }
@@ -261,11 +276,16 @@
       intermediate:BOARD_CATALOGS.intermediate.map(x=>x.value)
     };
     ALL_PRESET_OPTIONS=[...new Set([...FAMILY_PRESETS.base,...FAMILY_PRESETS.intermediate])];
+    const cachedMaps={...(ui.boardMaps||{})};
     [...BOARD_CATALOGS.base,...BOARD_CATALOGS.intermediate].forEach(x=>{
       if(x?.value && Array.isArray(x.livestock_ids) && Array.isArray(x.crop_ids)){
-        BOARD_MAPS[x.value]={livestock:x.livestock_ids.map(Number),crop:x.crop_ids.map(Number)};
+        const map={livestock:x.livestock_ids.map(Number),crop:x.crop_ids.map(Number)};
+        BOARD_MAPS[x.value]=map;
+        cachedMaps[x.value]=map;
       }
     });
+    ui.boardMaps=cachedMaps;
+    saveLocal();
   }
 
   async function createGame(){
@@ -1064,8 +1084,12 @@
   function liveFarmSnapshot(p){ return p?.public_farm||p?.farm_view||p?.board_snapshot||null; }
   function liveFarmResourceIds(side,p,snap){
     const g=ui.server?.game||{};
+    const direct=side==="livestock"?(snap?.livestock_ids||p?.livestock_ids):(snap?.crop_ids||p?.crop_ids);
+    if(Array.isArray(direct)&&direct.length===18) return direct.map(Number);
     const preset=side==="livestock"?(snap?.livestock_preset||p?.livestock_preset||g.livestock_preset||p?.board_preset||"Standard"):(snap?.crop_preset||p?.crop_preset||g.crop_preset||p?.board_preset||"Standard");
-    return (BOARD_MAPS[preset]||BOARD_MAPS.Standard)[side]||BOARD_MAPS.Standard[side];
+    const map=BOARD_MAPS[preset];
+    if(map&&Array.isArray(map[side])&&map[side].length===18) return map[side];
+    return preset==="Standard"?BOARD_MAPS.Standard[side]:[];
   }
   function liveFarmRows(side,p,snap){
     if(Array.isArray(snap?.row_scores)) return snap.row_scores.filter(x=>x.side===side).map(finalRowAudit).join("");
@@ -1271,7 +1295,9 @@
       );
       const g=ui.server?.game||{};
       const preset=type==="livestock"?(player?.livestock_preset||g.livestock_preset||player?.board_preset||"Standard"):(player?.crop_preset||g.crop_preset||player?.board_preset||"Standard");
-      const rid=(BOARD_MAPS[preset]||BOARD_MAPS.Standard)?.[type]?.[target-1];
+      const direct=type==="livestock"?player?.livestock_ids:player?.crop_ids;
+      const ids=(Array.isArray(direct)&&direct.length===18)?direct:(BOARD_MAPS[preset]?.[type]||(preset==="Standard"?BOARD_MAPS.Standard[type]:[]));
+      const rid=ids?.[target-1];
       const rr=RESOURCES[Number(rid)];
       const icon=type==="livestock"?"🐄":"🌱";
       return rr?`${icon} ${rr.short} (row ${target})`:`${icon} ${type==="livestock"?"Livestock":"Crop"} ${target||"?"}`;
@@ -1912,9 +1938,14 @@
     return player?.crop_preset||g.crop_preset||player?.board_preset||"Standard";
   }
   function resourceIds(side){
-    const preset=sidePreset(side);
-    const map=BOARD_MAPS[preset]||BOARD_MAPS.Standard;
-    return map[side]||BOARD_MAPS.Standard[side];
+    const player=ui.server?.me||{};
+    const direct=side==="livestock"?player.livestock_ids:player.crop_ids;
+    if(Array.isArray(direct)&&direct.length===18) return direct.map(Number);
+    const preset=sidePreset(side,player);
+    const map=BOARD_MAPS[preset];
+    if(map&&Array.isArray(map[side])&&map[side].length===18) return map[side];
+    // Never silently substitute Standard for a non-Standard saved board.
+    return preset==="Standard"?BOARD_MAPS.Standard[side]:[];
   }
 
   function resourceCountById(id){
