@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.8.4";
+  const VERSION = "0.8.6";
   const LOCAL_KEY = "farm-roll-online-v0.8.0";
   const LEGACY_KEYS = ["farm-roll-online-v0.7.1","farm-roll-online-v0.7.0","farm-roll-online-v0.6.9","farm-roll-online-v0.6.8","farm-roll-online-v0.6.7","farm-roll-online-v0.6.5","farm-roll-online-v0.6.4","farm-roll-online-v0.6.3","farm-roll-online-v0.6.2","farm-roll-online-v0.6.1","farm-roll-online-v0.6","farm-roll-online-v0.5b","farm-roll-online-v0.5a2","farm-roll-online-v0.5a1","farm-roll-online-v0.5a","farm-roll-online-v0.4b"];
   const POLL_MS = 3500;
@@ -185,7 +185,7 @@
     };
   }
   function newEditor(){
-    return {actionType:"livestock",blackFace:1,actions:[],selected:[],used:[],committedTarget:1};
+    return {actionType:"livestock",blackFace:1,actions:[],selected:[],used:[],committedTarget:1,wandererRow:1,helpers:{horse:0,donkey:0,ox:0,pig:0}};
   }
   function loadLocal(){
     try {
@@ -554,7 +554,8 @@
     await busy(async()=>{
       const result=await rpc("farm_roll_submit_play_cards",{p_game_id:ui.gameId,p_card_numbers:choices});
       ui.playChoices=[];
-      ui.message=result?.bonus_vp?`Play Cards complete. +${result.bonus_vp} VP from 🏚️.`:"Play Cards committed.";
+      const investor=Number(result?.event_investor_cash||0), bonus=Number(result?.bonus_vp||0);
+      ui.message=[bonus?`+${bonus} VP from 🏚️`:"",investor?`+$${investor} Event Investor`:""].filter(Boolean).join(" • ")||"Play Cards committed.";
       await refreshRoom(false);
     });
   }
@@ -690,8 +691,62 @@
   }
   function resourceDiceLimit(){ return hasPower("workaholic")?6:3; }
   function committedTarget(){ return Math.max(1,Math.min(18,Number(ui.editor.committedTarget||1))); }
-  function effectiveResourceTarget(){
-    const sum=selectedSum();
+  function emptyHelpers(){ return {horse:0,donkey:0,ox:0,pig:0}; }
+  function livingResourceCount(resourceId){
+    const ids=resourceIds("livestock");
+    const idx=ids.indexOf(Number(resourceId));
+    return idx<0?0:Number(boardState().livestock_counts?.[idx]||0);
+  }
+  function helperEligible(kind,type=ui.editor.actionType){
+    if(kind==="horse") return hasPower("horse_whisperer")?livingResourceCount(17)+livingResourceCount(18):0;
+    if(kind==="donkey") return hasPower("donkey_workers")?livingResourceCount(41)+livingResourceCount(42):0;
+    if(kind==="ox") return type==="crop"&&hasPower("oxen_workers")?livingResourceCount(15)+livingResourceCount(16):0;
+    if(kind==="pig") return type==="crop"&&hasPower("pig_manure")?livingResourceCount(11)+livingResourceCount(12):0;
+    return 0;
+  }
+  function normalizedHelpers(type=ui.editor.actionType){
+    const raw=ui.editor.helpers||{}, out=emptyHelpers();
+    for(const kind of Object.keys(out)) out[kind]=Math.max(0,Math.min(helperEligible(kind,type),Number(raw[kind]||0)));
+    return out;
+  }
+  function helperDelta(type=ui.editor.actionType){
+    const h=normalizedHelpers(type);
+    return h.horse-h.donkey+h.ox-h.pig;
+  }
+  function adjustedResourceSum(type=ui.editor.actionType){ return selectedSum()+helperDelta(type); }
+  function helperSummary(type=ui.editor.actionType){
+    const h=normalizedHelpers(type), parts=[];
+    if(h.horse) parts.push(`Horse +${h.horse}`);
+    if(h.donkey) parts.push(`Donkey −${h.donkey}`);
+    if(h.ox) parts.push(`Ox +${h.ox}`);
+    if(h.pig) parts.push(`Pig −${h.pig}`);
+    return parts.join(" • ");
+  }
+  function changeHelper(kind,delta){
+    const type=ui.editor.actionType;
+    if(type!=="livestock"&&type!=="crop") return;
+    ui.editor.helpers={...emptyHelpers(),...(ui.editor.helpers||{})};
+    const max=helperEligible(kind,type), cur=Number(ui.editor.helpers[kind]||0);
+    ui.editor.helpers[kind]=Math.max(0,Math.min(max,cur+Number(delta||0)));
+    saveLocal();render();
+  }
+  function helperControls(type){
+    if(type!=="livestock"&&type!=="crop") return "";
+    const specs=[
+      ["horse","🐎","Horse Whisperer","+1"],
+      ["donkey","🫏","Donkey Workers","−1"],
+      ["ox","🐂","Oxen Workers","+1"],
+      ["pig","🐖","Pig Manure","−1"]
+    ].filter(([kind])=>helperEligible(kind,type)>0);
+    if(!specs.length) return "";
+    const h=normalizedHelpers(type), delta=helperDelta(type);
+    return `<div class="note" style="margin-top:12px"><strong>🐾 Animal helpers</strong><div class="tiny">Optional • uses animals living before this turn • reusable on later actions.</div>
+      <div class="player-list" style="margin-top:8px">${specs.map(([kind,icon,label,mod])=>`<div class="player"><div><strong>${icon} ${label}</strong><div class="tiny">${helperEligible(kind,type)} eligible • ${mod} each</div></div><div class="draw-stepper"><button data-helper-minus="${kind}" ${h[kind]<=0?"disabled":""}>−</button><span>${h[kind]}</span><button data-helper-plus="${kind}" ${h[kind]>=helperEligible(kind,type)?"disabled":""}>+</button></div></div>`).join("")}</div>
+      <div class="tiny" style="margin-top:6px">Current helper adjustment: <strong>${delta>=0?"+":""}${delta}</strong></div>
+    </div>`;
+  }
+  function effectiveResourceTarget(type=ui.editor.actionType){
+    const sum=adjustedResourceSum(type);
     return hasPower("committed")&&sum>=19?committedTarget():sum;
   }
   function validSelection(type){
@@ -701,8 +756,9 @@
       if(type==="crop"&&ds.some(d=>d.type==="livestock")) return false;
       if(type==="livestock"&&ds.some(d=>d.type==="crop")) return false;
     }
-    const raw=selectedSum(), target=effectiveResourceTarget();
-    if(raw>18&&!hasPower("committed")) return false;
+    const total=adjustedResourceSum(type), target=effectiveResourceTarget(type);
+    if(total<1) return false;
+    if(total>18&&!hasPower("committed")) return false;
     return target>=1&&target<=18&&resourceSpaceAvailable(type,target);
   }
 
@@ -715,6 +771,7 @@
   }
   function chooseType(t){
     ui.editor.actionType=t;
+    ui.editor.helpers=emptyHelpers();
     if(t==="house"||t==="blacktrack") ui.editor.selected=[];
     saveLocal();render();
   }
@@ -725,16 +782,17 @@
       const idx=nextPlayIndex();
       if(!idx) return;
       const typ=playTypeAt(idx), icon=PLAY_ICON[typ];
-      a={type:"house",playIndex:idx,houseType:typ,title:`${icon} Play Cards #${idx}`,detail:`Circle next ${playTypeName(typ)} space • zero dice`};
+      a={type:"house",playIndex:idx,houseType:typ,title:`${icon} Play Cards #${idx}`,detail:`${hasPower("wanderer")?`Wanderer row ${Number(ui.editor.wandererRow||1)} • `:""}Circle ${playTypeName(typ)} space • zero dice`};
     }else if(ui.editor.actionType==="blacktrack"){
       a={type:"blacktrack",face:ui.editor.blackFace,title:"⬛ Black track prep",detail:`Circle face ${ui.editor.blackFace} • zero dice`};
     }else{
       if(!validSelection(ui.editor.actionType)) return;
-      const ds=selectedDice(), raw=selectedSum(), target=effectiveResourceTarget(), cost=selectedCost();
-      a={type:ui.editor.actionType,diceIds:ds.map(d=>d.id),target,cost,
+      const ds=selectedDice(), diceTotal=selectedSum(), helpers=normalizedHelpers(ui.editor.actionType), delta=helperDelta(ui.editor.actionType), adjusted=diceTotal+delta, target=effectiveResourceTarget(ui.editor.actionType), cost=selectedCost();
+      const usedHelpers=Object.fromEntries(Object.entries(helpers).filter(([,n])=>Number(n)>0));
+      a={type:ui.editor.actionType,diceIds:ds.map(d=>d.id),target,cost,helpers:usedHelpers,
         title:ui.editor.actionType==="livestock"?`🐄 Livestock ${target}`:`🌱 Crop ${target}`,
-        detail:`${ds.map(shortDie).join(" + ")}${raw>=19&&target!==raw?` → ${target} (Committed)`:""}${cost?` • cost: $${cost}`:" • free dice"}`};
-      ui.editor.used.push(...a.diceIds); ui.editor.selected=[];
+        detail:`${ds.map(shortDie).join(" + ")}${helperSummary(ui.editor.actionType)?` • ${helperSummary(ui.editor.actionType)} = ${adjusted}`:""}${adjusted>=19&&target!==adjusted?` → ${target} (Committed)`:""}${cost?` • cost: $${cost}`:" • free dice"}`};
+      ui.editor.used.push(...a.diceIds); ui.editor.selected=[]; ui.editor.helpers=emptyHelpers();
     }
     ui.editor.actions.push(a);saveLocal();render();
   }
@@ -935,8 +993,8 @@
           <label>Bots <span class="tiny">0–7 • 8 total seats max</span><select id="createBotCount">${[0,1,2,3,4,5,6,7].map(n=>`<option value="${n}">${n===0?"None":`${n} bot${n===1?"":"s"}`}</option>`).join("")}</select></label>
           <div id="createBotConfigs" class="bot-config-list"><div class="tiny">No bots selected.</div></div>
           <div class="note setup-note"><strong>Random</strong> bots choose random legal decisions. <strong>Focused</strong> bots use a different hidden 2–7 animal-pair / 3–12 crop profile, rotate completed rows, and use strategic Butcher choices. Choose <strong>Asymmetric — players choose</strong> to set each bot's livestock and crop board independently; Symmetric and Auto Select follow the table's board mode.</div>
-          <label>Powers <span class="tiny">v0.8 Power-engine playtest</span><select id="createPowers"><option value="on" selected>ON — use the 5-card Power River</option><option value="off">OFF — classic rules</option></select></label>
-          <div class="note warning setup-note"><strong>Power playtest:</strong> acquisition, initiative ordering, Power Hungry, Fortune Teller, and Planner are live. Other Power cards are visible with their locked rules but are still marked as engine-pending in this build.</div>
+          <label>Powers <span class="tiny">v0.8.6 • 23 active Powers</span><select id="createPowers"><option value="on" selected>ON — active-only 5-card Power River</option><option value="off">OFF — classic rules</option></select></label>
+          <div class="note setup-note"><strong>Power playtest:</strong> 23 Powers are ENGINE ACTIVE in v0.8.6. New games build the Power River only from active cards, including animal helpers, Wanderer, Full Row Draw, Event Investor, and Empty Pens.</div>
           <label>Maximum Event Reveals <span class="tiny">optional • blank = normal game</span><input id="createMaxReveals" inputmode="numeric" pattern="[0-9]*" min="1" step="1" placeholder="e.g. 7"></label>
           <button id="createBtn" class="primary" ${ui.busy?"disabled":""}>${ui.busy?"Opening…":"OPEN TABLE"}</button>
         </div>
@@ -1222,9 +1280,14 @@
     const pid=String(r.player_id||r.seat||r.display_name||"");
     const playerOpen=ui.finalOpenPlayers?.[pid] ?? !!r.is_winner;
     const auditOpen=!!ui.finalAuditOpen?.[pid];
+    const pb=r.power_vp_breakdown||{};
+    const powerLabels={cages:"Cages",forester:"Forester",quarry_master:"Quarry Master",thanksgiving_tradition:"Thanksgiving",corn_subsidy:"Corn Subsidy",painter:"Painter"};
+    const powerParts=Object.entries(powerLabels).map(([k,label])=>[label,Number(pb?.[k]||0)]).filter(([,vp])=>vp!==0);
+    const powerDetail=powerParts.length?`<div class="tiny" style="margin-top:8px">⚡ ${powerParts.map(([label,vp])=>`${esc(label)} +${vp}`).join(" • ")}</div>`:"";
     return `<details class="final-player ${r.is_winner?"winner":""}" data-final-player="${esc(pid)}" ${playerOpen?"open":""}>
       <summary><span><strong>${r.is_winner?"🏆 ":""}${esc(r.display_name)}</strong><small>🐄 ${esc(presetShortLabel(r.livestock_preset||r.board_preset||"Standard"))} • 🌱 ${esc(presetShortLabel(r.crop_preset||r.board_preset||"Standard"))}</small></span><span class="final-total">${Number(r.total_vp||0)} VP</span></summary>
       <div class="score-breakdown"><div><strong>${Number(r.cash_vp||0)}</strong><span>Cash VP<br>$${Number(r.cash||0)}</span></div><div><strong>${Number(r.row_vp||0)}</strong><span>Row VP</span></div><div><strong>${Number(r.house_vp||0)}</strong><span>🏚️ VP</span></div><div><strong>${Number(r.power_vp||0)}</strong><span>Power VP</span></div></div>
+      ${powerDetail}
       <details class="row-audit" data-final-audit="${esc(pid)}" ${auditOpen?"open":""}><summary>View all 36 resource rows</summary><div class="row-audit-list">${rows.map(finalRowAudit).join("")}</div></details>
     </details>`;
   }
@@ -1245,8 +1308,8 @@
   function choosePanel(hasRoll,submitted){
     if(!hasRoll) return `<section class="card"><div class="note">The round has no shared roll yet.</div></section>`;
     if(submitted) return `<section class="card center"><div class="big-icon">🔒</div><h2>Your actions are committed</h2><p class="small">Actions and new fences are permanent. They stay private until every player commits. Then all players see the three actions and learn whether event play is Solo or Cooperative before anyone chooses actual cards.</p></section>`;
-    const dice=sharedDice(), ds=selectedDice(), sum=selectedSum(), cost=selectedCost();
     const type=ui.editor.actionType, diceType=type==="livestock"||type==="crop";
+    const dice=sharedDice(), ds=selectedDice(), diceSum=selectedSum(), sum=diceType?adjustedResourceSum(type):diceSum, helperAdj=diceType?helperDelta(type):0, cost=selectedCost();
     const actionSpend=committedActionCost(), firstFee=estimatedFirstResourceFee(), fenceCount=(ui.fenceDraft||[]).length, fenceSpend=fenceDraftCost(), projected=actionSpend+firstFee+fenceSpend;
     const cash=cashOnHand(), canAfford=projected<=cash, planValid=queuedResourcesFit();
     const canAdd=ui.editor.actions.length<3 && ((type==="house"&&playTrackSpaceAvailable())||(type==="blacktrack"&&blackTrackSpaceAvailable(ui.editor.blackFace))||validSelection(type));
@@ -1259,7 +1322,7 @@
       <section class="card">
         <h2>🎲 Shared roll</h2>
         <div class="dice-grid">${dice.map(d=>`<button class="die ${d.type} ${ui.editor.selected.includes(d.id)?"selected":""} ${ui.editor.used.includes(d.id)?"used":""}" data-die="${d.id}" ${ui.editor.used.includes(d.id)?"disabled":""}><div class="value">${d.value}</div><div class="name">${dieLabel(d)}</div></button>`).join("")}</div>
-        <div class="sum-box"><div><div class="tiny">SELECTED</div><div>${ds.length?ds.map(shortDie).join(" + "):"No dice selected"}</div></div><div style="text-align:right"><div class="tiny">COST ${cost?`$${cost}`:"$0"}</div><div class="sum-big">${ds.length?sum:"—"}</div></div></div>
+        <div class="sum-box"><div><div class="tiny">SELECTED</div><div>${ds.length?ds.map(shortDie).join(" + "):"No dice selected"}${helperAdj?` • helpers ${helperAdj>0?"+":""}${helperAdj}`:""}</div></div><div style="text-align:right"><div class="tiny">COST ${cost?`$${cost}`:"$0"}</div><div class="sum-big">${ds.length?sum:"—"}</div></div></div>
       </section>
       <section class="card">
         <h2>Prepare action ${ui.editor.actions.length+1}</h2>
@@ -1270,6 +1333,8 @@
           <button class="choice ${type==="blacktrack"?"active":""}" data-type="blacktrack">⬛ Black track</button>
         </div>
         ${type==="blacktrack"?`<div style="margin-top:12px"><div class="small">Choose face/column:</div><div class="face-row black-face-row" style="margin-top:7px">${[1,2,3,4,5,6].map(n=>blackFaceChoice(n)).join("")}</div></div>`:""}
+        ${type==="house"&&hasPower("wanderer")?`<label class="committed-target">🧭 Wanderer Play Cards row<select id="wandererRowSelect">${[1,2,3].map(row=>`<option value="${row}" ${wandererRow()===row?"selected":""}>Row ${row} • ${row===1?"spaces 1–10":row===2?"spaces 11–23":"spaces 24–36"}</option>`).join("")}</select></label>`:""}
+        ${diceType?helperControls(type):""}
         ${diceType&&sum>=19&&hasPower("committed")?`<label class="committed-target">⚡ Committed target row<select id="committedTargetSelect">${Array.from({length:18},(_,i)=>{const row=i+1,rid=resourceIds(type)[i],rr=RESOURCES[rid]||{};return `<option value="${row}" ${committedTarget()===row?"selected":""}>${row} • ${rr.icon||""} ${esc(rr.short||rr.name||"")}</option>`}).join("")}</select></label>`:""}
         <div class="note ${diceType&&ds.length&&!validSelection(type)?"warning":""}" style="margin-top:12px">${actionHint(type,ds,sum)}</div>
         <button id="addBtn" class="primary" style="width:100%;margin-top:12px" ${canAdd?"":"disabled"}>Add action</button>
@@ -1523,7 +1588,7 @@
       <div class="power-market-grid">${river.map(p=>{const cost=Number(p.cost??p.base_cost??0),active=String(p.engine_status)==="implemented"||String(p.engine_status)==="tested";return `<article class="power-card ${active?"implemented":"pending"}"><div class="power-card-head"><div><strong>${esc(p.name)}</strong><small>${active?"ENGINE ACTIVE":"RULE LOCKED • ENGINE PENDING"}</small></div><span>$${cost}</span></div><p>${esc(p.rules_text||"")}</p></article>`}).join("")||'<div class="note">The Power River is empty.</div>'}</div>
       <div class="power-owned-section">
         <div class="cards-heading"><strong>⚡ My Powers</strong><span class="tiny">${mine.length} owned</span></div>
-        ${mine.length?`<div class="power-owned-grid">${mine.map(p=>`<article class="power-owned-card"><strong>${esc(p.name)}</strong><small>${esc(p.rules_text||"")}</small><span>Acquired for $${Number(p.acquisition_price||0)}</span></article>`).join("")}</div>`:`<div class="note">No Powers owned yet.</div>`}
+        ${mine.length?`<div class="power-owned-grid">${mine.map(p=>{const active=String(p.engine_status)==="implemented"||String(p.engine_status)==="tested";return `<article class="power-owned-card"><strong>${esc(p.name)}</strong><small>${esc(p.rules_text||"")}</small><span>${active?"ENGINE ACTIVE":"ENGINE PENDING"} • Acquired for $${Number(p.acquisition_price||0)}</span></article>`}).join("")}</div>`:`<div class="note">No Powers owned yet.</div>`}
       </div>
     </section>`;
   }
@@ -1538,7 +1603,7 @@
       ${cur?`<div class="note ${ps.my_turn?"":"warning"}" style="margin-top:9px"><strong>#${Number(cur.initiative_card_number||0)}:</strong> ${ps.my_turn?"Choose one Power now.":`${esc(cur.display_name)} chooses next.`}</div>`:""}
       <div class="power-market-grid">${market.map(p=>{const cost=Number(p.cost??p.base_cost??0),active=String(p.engine_status)==="implemented"||String(p.engine_status)==="tested";return `<article class="power-card ${active?"implemented":"pending"}"><div class="power-card-head"><div><strong>${esc(p.name)}</strong><small>${active?"ENGINE ACTIVE":"RULE LOCKED • ENGINE PENDING"}</small></div><span>$${cost}</span></div><p>${esc(p.rules_text||"")}</p>${ps.my_turn?`<button class="${active?"primary":"secondary"}" data-power-pick="${Number(p.power_id)}" ${cash<cost?"disabled":""}>Take ${esc(p.name)} • $${cost}</button>`:""}</article>`}).join("")}</div>
       ${mine.length?`<div class="owned-powers"><strong>Your Powers</strong><div>${mine.map(p=>`<span>${esc(p.name)}${Number(p.acquisition_price)===0?" • $0":` • $${Number(p.acquisition_price)}`}</span>`).join("")}</div></div>`:""}
-      <div class="note warning" style="margin-top:10px">v0.8 Power-engine playtest: only cards marked <strong>ENGINE ACTIVE</strong> currently apply their gameplay effect. Pending cards are shown so initiative/market behavior can be tested without hiding their rules.</div>
+      <div class="note" style="margin-top:10px">v0.8.6 playtest: newly created Power games use only <strong>ENGINE ACTIVE</strong> cards. Older saved rooms can still contain Powers acquired before the active-only River change.</div>
     </section>`;
   }
 
@@ -1581,9 +1646,23 @@
   }
   function queuedHouseCount(){ return ui.editor.actions.filter(a=>a.type==="house").length; }
   function playUsedCount(){ return playTrack().filter(x=>x!==0).length; }
+  function projectedPlayTrack(){
+    const t=playTrack().slice();
+    for(const a of (ui.editor.actions||[])){
+      if(a?.type==="house"&&Number(a.playIndex)>=1&&Number(a.playIndex)<=36) t[Number(a.playIndex)-1]=1;
+    }
+    return t;
+  }
+  function wandererRow(){ return Math.max(1,Math.min(3,Number(ui.editor.wandererRow||1))); }
   function nextPlayIndex(){
-    const n=playUsedCount()+queuedHouseCount()+1;
-    return n<=36?n:null;
+    const t=projectedPlayTrack();
+    if(hasPower("wanderer")){
+      const ranges=[[1,10],[11,23],[24,36]], [start,end]=ranges[wandererRow()-1];
+      for(let i=start;i<=end;i++) if(Number(t[i-1]||0)===0) return i;
+      return null;
+    }
+    const idx=t.findIndex(v=>Number(v||0)===0);
+    return idx>=0?idx+1:null;
   }
   function playTrackSpaceAvailable(){ return nextPlayIndex()!==null; }
   function pendingPlayIndexes(){ return playTrack().map((v,i)=>v===1?i+1:null).filter(Boolean); }
@@ -2291,6 +2370,9 @@
     document.querySelectorAll("[data-fence]").forEach(x=>x.addEventListener("click",()=>toggleFence(x.dataset.fence)));
     $("#fenceRowSelect")?.addEventListener("change",e=>{ui.fenceRow=Number(e.target.value);saveLocal();render();});
     $("#committedTargetSelect")?.addEventListener("change",e=>{ui.editor.committedTarget=Number(e.target.value);saveLocal();render();});
+    $("#wandererRowSelect")?.addEventListener("change",e=>{ui.editor.wandererRow=Number(e.target.value);saveLocal();render();});
+    document.querySelectorAll("[data-helper-plus]").forEach(x=>x.addEventListener("click",()=>changeHelper(x.dataset.helperPlus,1)));
+    document.querySelectorAll("[data-helper-minus]").forEach(x=>x.addEventListener("click",()=>changeHelper(x.dataset.helperMinus,-1)));
 
     document.querySelectorAll("select,input,textarea").forEach(el=>{
       el.addEventListener("focus",()=>holdBackgroundRender(60000));
